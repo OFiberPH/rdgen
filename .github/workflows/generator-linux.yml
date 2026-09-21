@@ -612,10 +612,17 @@ jobs:
 
             # Only run the whitelabeling steps if the custom app name is actually different
             if [ "${{ env.appname }}" != "rustdesk" ]; then
+                # Linux packages/paths/binary need a filesystem-safe, lowercase id:
+                # the app name may contain spaces or capitals, which are invalid for a
+                # dpkg/rpm package name and break the unquoted mv/cp in build.py. The
+                # human-readable display name (Name= in the .desktop) is preserved via
+                # the "RustDesk" -> appname substitutions below.
+                LXPKG=$(printf '%s' "${{ env.filename }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-' | tr -cd 'a-z0-9.+-')
+                [ -z "$LXPKG" ] && LXPKG=rustdesk
                 # Change files names in the output .deb
-                sed -ie "s|\(cp .* \)tmpdeb/usr/share/rustdesk/files/systemd/|\1tmpdeb/usr/share/rustdesk/files/systemd/${{ env.appname }}.service|g" build.py
-                sed -ie "s|cp -r \(.\+\)\* \([^ ]\+\)/rustdesk|mv \1rustdesk \1${{ env.appname }}; cp -r \1\* \2/${{ env.appname }}|g" build.py
-                sed -ie "s|\(tmpdeb/[^ ]*\)rustdesk|\1${{ env.appname }}|g" build.py
+                sed -ie "s|\(cp .* \)tmpdeb/usr/share/rustdesk/files/systemd/|\1tmpdeb/usr/share/rustdesk/files/systemd/$LXPKG.service|g" build.py
+                sed -ie "s|cp -r \(.\+\)\* \([^ ]\+\)/rustdesk|mv \1rustdesk \1$LXPKG; cp -r \1\* \2/$LXPKG|g" build.py
+                sed -ie "s|\(tmpdeb/[^ ]*\)rustdesk|\1$LXPKG|g" build.py
                 # The rename above is greedy in \1, so it rewrites only the LAST
                 # "rustdesk" of each path and leaves build.py's globs pointing where the
                 # staging tree never exists. Three corrections, all confined to the drm
@@ -623,35 +630,35 @@ jobs:
                 # stock packaging path never executes those lines.
                 #
                 # 1. Directory component: the cp -r rename above stages into
-                #    tmpdeb/usr/share/<appname>/, but the globs kept usr/share/rustdesk/.
-                sed -ie "s|tmpdeb/usr/share/rustdesk/|tmpdeb/usr/share/${{ env.appname }}/|g" build.py
+                #    tmpdeb/usr/share/<pkg>/, but the globs kept usr/share/rustdesk/.
+                sed -ie "s|tmpdeb/usr/share/rustdesk/|tmpdeb/usr/share/$LXPKG/|g" build.py
                 # 2. Library filename: build.py renames only the executable and copies the
                 #    bundle verbatim, so the cdylib stays librustdesk.so. The greedy sed
-                #    renamed it to lib<appname>.so, and that is the file carrying the drm
+                #    renamed it to lib<pkg>.so, and that is the file carrying the drm
                 #    marker -- the thin Flutter launcher does not.
-                sed -ie "s|lib/lib${{ env.appname }}\.so|lib/librustdesk.so|g" build.py
+                sed -ie "s|lib/lib$LXPKG\.so|lib/librustdesk.so|g" build.py
                 # 3. libdrmtap must NOT be renamed: drmtap_dl.rs dlopens the absolute path
                 #    /usr/lib/rustdesk/libdrmtap.so.0, compiled into the binary and
-                #    rewritten by nothing here. Staging it under /usr/lib/<appname>/
+                #    rewritten by nothing here. Staging it under /usr/lib/<pkg>/
                 #    packages and installs cleanly, then never loads on the user's machine.
-                sed -ie "s|tmpdeb/usr/lib/${{ env.appname }}|tmpdeb/usr/lib/rustdesk|g" build.py
-                sed -ie "s|Package: rustdesk|Package: ${{ env.appname }}|g" build.py
+                sed -ie "s|tmpdeb/usr/lib/$LXPKG|tmpdeb/usr/lib/rustdesk|g" build.py
+                sed -ie "s|Package: rustdesk|Package: $LXPKG|g" build.py
                 sed -ie "s|RustDesk|${{ env.appname }}|g" res/rustdesk.desktop
                 FILES=$(sed -ne "s~.*cp\s\(../\)\?\+\(.\+\.\(desktop\|service\)\)\s\+tmpdeb/.*~\2~p" build.py | sort | uniq)
                 FILES=$(echo -e "$FILES\n$(ls --color=never res/DEBIAN/*)")
                 for FILE in $(echo $FILES | sed "s/\n/ /g"); do
-                  sed -ie "s|rustdesk|${{ env.appname }}|g" $FILE
+                  sed -ie "s|rustdesk|$LXPKG|g" $FILE
                 done
                 for file in "./res/rpm-flutter.spec" "./res/rpm-flutter-suse.spec"; do
                   sed -ie "s|^\(URL:\s*\).*|\1${{ env.downloadLink }}|g" "$file"
                   sed -ie "s|^\(Vendor:\s*\).*|\1${{ env.compname }}|g" "$file"
-                  sed -ie '/\${\?HBB}\?/!{/\(^Name:\|\/usr\|\/etc\|systemctl\)/s|rustdesk|${{ env.appname }}|g}' "$file"
-                  sed -ie '/\${\?HBB}\?/{/^install/s|\(\/usr\/.*\/\)rustdesk|\1${{ env.appname }}|g}' "$file"
-                  sed -ie '/\${\?HBB}\?/{/^mkdir/s|rustdesk|${{ env.appname }}|g}' "$file"
+                  sed -ie '/\${\?HBB}\?/!{/\(^Name:\|\/usr\|\/etc\|systemctl\)/s|rustdesk|'"$LXPKG"'|g}' "$file"
+                  sed -ie '/\${\?HBB}\?/{/^install/s|\(\/usr\/.*\/\)rustdesk|\1'"$LXPKG"'|g}' "$file"
+                  sed -ie '/\${\?HBB}\?/{/^mkdir/s|rustdesk|'"$LXPKG"'|g}' "$file"
                   for extension in ".desktop" "-link.desktop" ".service"; do
-                    sed -ie "/^%files$/i\mv %{buildroot}/usr/share/${{ env.appname }}/files/rustdesk$extension %{buildroot}/usr/share/${{ env.appname }}/files/${{ env.appname }}$extension" "$file"
-                    sed -ie "/^%files$/i\sed -ie 's|RustDesk|${{ env.appname }}|g' %{buildroot}/usr/share/${{ env.appname }}/files/${{ env.appname }}$extension" "$file"
-                    sed -ie "/^%files$/i\sed -ie 's|rustdesk|${{ env.appname }}|g' %{buildroot}/usr/share/${{ env.appname }}/files/${{ env.appname }}$extension" "$file"
+                    sed -ie "/^%files$/i\mv %{buildroot}/usr/share/$LXPKG/files/rustdesk$extension %{buildroot}/usr/share/$LXPKG/files/$LXPKG$extension" "$file"
+                    sed -ie "/^%files$/i\sed -ie 's|RustDesk|${{ env.appname }}|g' %{buildroot}/usr/share/$LXPKG/files/$LXPKG$extension" "$file"
+                    sed -ie "/^%files$/i\sed -ie 's|rustdesk|$LXPKG|g' %{buildroot}/usr/share/$LXPKG/files/$LXPKG$extension" "$file"
                   done
                   sed -ie '/^%files$/i\\n' "$file"
                 done

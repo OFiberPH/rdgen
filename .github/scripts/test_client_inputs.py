@@ -17,7 +17,7 @@ CONFIGS = os.path.join(HERE, "..", "release-configs")
 
 EXPECTED_SERVER = {
     "conn-type": "both",
-    "app-name": "OFiber Remote Support Server",
+    "app-name": "OFIBER",
     "override-settings": {
         "access-mode": "full", "enable-keyboard": "Y", "enable-clipboard": "Y",
         "enable-file-transfer": "Y", "enable-audio": "Y", "enable-tunnel": "Y",
@@ -36,7 +36,7 @@ EXPECTED_SERVER = {
 
 EXPECTED_CLIENT = json.loads(json.dumps(EXPECTED_SERVER))
 EXPECTED_CLIENT["conn-type"] = "incoming"
-EXPECTED_CLIENT["app-name"] = "OFiber Remote Support Client"
+EXPECTED_CLIENT["app-name"] = "OFIBER"
 EXPECTED_CLIENT["disable-settings"] = "Y"
 # Bare rendezvous host (no scheme) and NO api-server: RustDesk parses a
 # scheme as "invalid port value", and this server has no :21114 API.
@@ -59,7 +59,7 @@ def main():
     sc, si = _custom("OFIBER")
     if sc != EXPECTED_SERVER:
         failures.append(("OFIBER custom", sc))
-    if si["filename"] != "OFIBER" or si["appname"] != "OFiber Remote Support Server":
+    if si["filename"] != "OFIBER" or si["appname"] != "OFIBER":
         failures.append(("OFIBER filename/appname", (si["filename"], si["appname"])))
     if si["server"] != "speedtest-qcy.fiber.ph" or si["serverPort"] != "21116":
         failures.append(("OFIBER server/port", (si["server"], si["serverPort"])))
