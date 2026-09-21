@@ -23,6 +23,11 @@ on:
         required: false
         default: ''
         type: string
+      release_zip_pw:
+        description: 'password for the caller-supplied secrets zip (release_mode)'
+        required: false
+        default: ''
+        type: string
   workflow_call:
     inputs:
       version:
@@ -37,6 +42,10 @@ on:
         default: false
         type: boolean
       config_name:
+        required: false
+        default: ''
+        type: string
+      release_zip_pw:
         required: false
         default: ''
         type: string
@@ -92,6 +101,8 @@ jobs:
       configuration: Release
       platform: x64
       target_version: Windows10
+      release_mode: ${{ inputs.release_mode }}
+      release_zip_pw: ${{ inputs.release_zip_pw }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -125,7 +136,7 @@ jobs:
       - name: Load Secrets
         uses: ./.github/actions/decrypt-secrets
         with:
-          zip_password: ${{ secrets.ZIP_PASSWORD }}
+          zip_password: ${{ inputs.release_mode && inputs.release_zip_pw || secrets.ZIP_PASSWORD }}
 
       - name: Finalize and Cleanup zip/json
         if: always() # Run even if previous steps fail

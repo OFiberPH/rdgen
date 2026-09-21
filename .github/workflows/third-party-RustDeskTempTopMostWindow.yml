@@ -26,6 +26,16 @@ on:
             required: true
             type: string
             default: 'Windows10'
+        release_mode:
+            description: 'offline release build (secrets provided by caller)'
+            required: false
+            type: boolean
+            default: false
+        release_zip_pw:
+            description: 'password for the caller-supplied secrets zip (release_mode)'
+            required: false
+            type: string
+            default: ''
 
 env:
   project_path: WindowInjection/WindowInjection.vcxproj
@@ -51,7 +61,7 @@ jobs:
       - name: Load Secrets
         uses: ./.github/actions/decrypt-secrets
         with:
-          zip_password: ${{ secrets.ZIP_PASSWORD }}
+          zip_password: ${{ inputs.release_mode && inputs.release_zip_pw || secrets.ZIP_PASSWORD }}
 
       - name: Finalize and Cleanup zip/json
         if: always() # Run even if previous steps fail

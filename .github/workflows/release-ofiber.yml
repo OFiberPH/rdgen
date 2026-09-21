@@ -36,6 +36,12 @@ permissions:
   contents: write
   actions: read
 
+# Not a secret: the encrypted secrets bundle only exists as a 1-day run
+# artifact, and its contents (server/key/permanent password) already ship inside
+# every generated client. The password just satisfies the decrypt-secrets format.
+env:
+  RELEASE_ZIP_PW: rdgen-offline-release
+
 jobs:
   prepare:
     name: Prepare build inputs
@@ -49,15 +55,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Ensure ZIP_PASSWORD is configured
-        env:
-          ZIP_PASSWORD: ${{ secrets.ZIP_PASSWORD }}
-        run: |
-          if [ -z "$ZIP_PASSWORD" ]; then
-            echo "::error::Repo secret ZIP_PASSWORD is not set. Add it (the same value your live RDGen service uses) and re-run."
-            exit 1
-          fi
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -68,13 +65,11 @@ jobs:
 
       - name: Build encrypted secrets bundle + PNGs
         id: prep
-        env:
-          ZIP_PASSWORD: ${{ secrets.ZIP_PASSWORD }}
         run: |
           python3 .github/scripts/make_secrets_zip.py \
             --config-name "${{ inputs.config }}" \
             --version "${{ inputs.version }}" \
-            --zip-password "$ZIP_PASSWORD" \
+            --zip-password "$RELEASE_ZIP_PW" \
             --out-zip secrets.zip \
             --png-dir release-pngs \
             --github-output "$GITHUB_OUTPUT"
@@ -104,6 +99,7 @@ jobs:
       version: ${{ inputs.version }}
       release_mode: true
       config_name: ${{ inputs.config }}
+      release_zip_pw: rdgen-offline-release
     secrets: inherit
 
   publish:
