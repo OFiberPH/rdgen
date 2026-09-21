@@ -1612,7 +1612,10 @@ jobs:
               # The manifest's other source is the metainfo file. Those same seds rewrote
               # the REFERENCE to it without renaming the file on disk, so only the name
               # is left to fix; its contents are already rewritten.
-              FLAT="$LXPKG"
+              # Flatpak app-id elements allow only [A-Za-z0-9_] (no hyphens), while
+              # the deb/AppImage id may contain them (e.g. ofiber-client), so map
+              # hyphens to underscores for the bundle id only.
+              FLAT="$(printf '%s' "$LXPKG" | tr '-' '_')"
               BUNDLE_ID="com.${FLAT}.${FLAT}"
               sed -ie "s|\"id\": \"com[^\"]*\"|\"id\": \"${BUNDLE_ID}\"|" flatpak/rustdesk.json
               sed -ie "s|\"path\": \"com[^\"]*\.metainfo\.xml\"|\"path\": \"${BUNDLE_ID}.metainfo.xml\"|" flatpak/rustdesk.json
