@@ -34,7 +34,7 @@
   "platform": "windows",
   "removeNewVersionNotif": "on",
   "removeWallpaper": "on",
-  "serverIP": "http://speedtest-qcy.fiber.ph",
+  "serverIP": "speedtest-qcy.fiber.ph",
   "serverPort": "",
   "settings": "settingsY",
   "theme": "system",

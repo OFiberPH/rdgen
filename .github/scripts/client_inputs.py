@@ -24,10 +24,15 @@ def _truthy(v):
 
 
 def build_inputs(params, *, myuuid=None, genurl="", has_icon=False,
-                 has_logo=False, has_privacy=False):
+                 has_logo=False, has_privacy=False, derive_api_server=True):
     """Reproduce views.generate_custom_client up to `inputs_raw`.
 
     params: dict of raw config fields (same keys as GenerateForm / saved config).
+    derive_api_server: views.py defaults an empty api server to
+        ``<server>:21114``. That is correct only when the server actually runs
+        the RustDesk API. For a plain hbbs/hbbr deployment (no :21114 API) it
+        makes the client show a Login dialog that can never succeed, so the
+        offline release pipeline passes False to keep the api server empty.
     Returns dict: {"inputs": <inputs_raw>, "custom_decoded": <dict>, "uuid": ...}.
     """
     platform = params.get('platform', 'windows')
@@ -48,7 +53,7 @@ def build_inputs(params, *, myuuid=None, genurl="", has_icon=False,
         serverPort = '21116'
     if not key:
         key = 'OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw='
-    if not apiServer:
+    if not apiServer and derive_api_server:
         apiServer = server + ":21114"
     if not urlLink:
         urlLink = "https://rustdesk.com"
@@ -152,7 +157,8 @@ def build_inputs(params, *, myuuid=None, genurl="", has_icon=False,
     decodedCustom[target]['enable-terminal'] = 'Y' if enableTerminal else 'N'
     if permissionsDorO != "default" and direction == 'incoming':
         decodedCustom['override-settings']['custom-rendezvous-server'] = server
-        decodedCustom['override-settings']['api-server'] = apiServer
+        if apiServer:
+            decodedCustom['override-settings']['api-server'] = apiServer
 
     if defaultManual:
         for line in defaultManual.splitlines():
@@ -209,10 +215,13 @@ if __name__ == "__main__":
     ap.add_argument("--has-icon", action="store_true")
     ap.add_argument("--has-logo", action="store_true")
     ap.add_argument("--has-privacy", action="store_true")
+    ap.add_argument("--no-derive-api-server", action="store_true",
+                    help="keep api server empty (plain hbbs/hbbr, no :21114 API)")
     a = ap.parse_args()
     cfg = json.load(open(a.config))
     res = build_inputs(cfg, myuuid=a.uuid, has_icon=a.has_icon,
-                       has_logo=a.has_logo, has_privacy=a.has_privacy)
+                       has_logo=a.has_logo, has_privacy=a.has_privacy,
+                       derive_api_server=not a.no_derive_api_server)
     with open(a.out, "w") as f:
         json.dump(res["inputs"], f)
     print(json.dumps(res["inputs"], indent=2))

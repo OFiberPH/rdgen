@@ -47,8 +47,13 @@ def main():
     has_logo = os.path.exists(os.path.join(cfg_dir, "logo.png"))
     # privacy image customization is applied only by the windows top-most-window
     # helper; skipped here (privacylink=false) so no live host fetch is needed.
+    # derive_api_server=False: this server is plain hbbs/hbbr with no :21114 API,
+    # so the client must ship with an EMPTY api server (a value there produces a
+    # Login dialog that can never succeed). Also relies on serverIP being a bare
+    # host (no http:// scheme), or RustDesk parses it as "invalid port value".
     res = build_inputs(cfg, myuuid=str(_uuid.uuid4()), has_icon=has_icon,
-                       has_logo=has_logo, has_privacy=False)
+                       has_logo=has_logo, has_privacy=False,
+                       derive_api_server=False)
     inputs_raw = res["inputs"]
 
     # Package exactly like views.py: AES-encrypted LZMA zip holding secrets.json
