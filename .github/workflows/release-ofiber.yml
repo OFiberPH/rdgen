@@ -105,7 +105,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: [prepare, build-windows]
-    if: ${{ !inputs.dry_run && !cancelled() && needs.prepare.result == 'success' && contains(needs.*.result, 'success') }}
+    if: ${{ !inputs.dry_run && !cancelled() && needs.build-windows.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Download build outputs
