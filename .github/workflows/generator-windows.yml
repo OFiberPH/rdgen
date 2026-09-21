@@ -1,6 +1,6 @@
 name: Custom Windows Client Generator
 run-name: Custom Windows Client Generator
-on: 
+on:
   workflow_dispatch:
     inputs:
       version:
@@ -11,6 +11,33 @@ on:
       zip_url:
         description: 'url to zip of json'
         required: true
+        default: ''
+        type: string
+      release_mode:
+        description: 'offline release build (secrets provided by caller, output published as artifact)'
+        required: false
+        default: false
+        type: boolean
+      config_name:
+        description: 'release-configs/<name> to build (release_mode only)'
+        required: false
+        default: ''
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      zip_url:
+        required: false
+        default: ''
+        type: string
+      release_mode:
+        required: false
+        default: false
+        type: boolean
+      config_name:
+        required: false
         default: ''
         type: string
 
@@ -43,6 +70,9 @@ env:
 
 jobs:
   setup:
+    # In release_mode the encrypted-secrets-zip artifact is supplied by the
+    # caller (release-ofiber.yml), so the URL-based fetch is skipped.
+    if: ${{ !inputs.release_mode }}
     uses: ./.github/workflows/fetch-encrypted-secrets.yml
     with:
       zip_url_json: ${{ inputs.zip_url }}
@@ -54,6 +84,7 @@ jobs:
 
   build-RustDeskTempTopMostWindow:
     needs: setup
+    if: ${{ !cancelled() && (needs.setup.result == 'success' || needs.setup.result == 'skipped') }}
     uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
     with:
       upload-artifact: true
@@ -68,6 +99,7 @@ jobs:
   build-for-windows-flutter:
     name: Build Windows
     needs: [build-RustDeskTempTopMostWindow, generate-bridge, setup]
+    if: ${{ !cancelled() && needs.build-RustDeskTempTopMostWindow.result == 'success' && needs.generate-bridge.result == 'success' && (needs.setup.result == 'success' || needs.setup.result == 'skipped') }}
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: false
@@ -142,6 +174,15 @@ jobs:
         with:
           name: bridge-artifact
           path: ./
+
+      - name: Restore release icon/logo (release_mode)
+        # PNGs are committed in rdgen; the rustdesk checkout above wipes them,
+        # so the caller (release-ofiber.yml) ships them as a run artifact.
+        if: ${{ inputs.release_mode }}
+        uses: actions/download-artifact@v4
+        with:
+          name: release-pngs
+          path: ./release-pngs
 
       - name: Install ImageMagick on Windows
         run: |
@@ -439,7 +480,7 @@ jobs:
           retry_wait_seconds: 15
           shell: pwsh
           command: |
-            Invoke-WebRequest -Uri ${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}"&"uuid=${{ env.iconlink_uuid }} -OutFile ./res/iconx.png 
+            if ("${{ inputs.release_mode }}" -eq "true") { Copy-Item ./release-pngs/icon.png ./res/iconx.png -Force } else { Invoke-WebRequest -Uri ${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}"&"uuid=${{ env.iconlink_uuid }} -OutFile ./res/iconx.png }
             mv ./res/icon.ico ./res/icon.ico.bak
             mv ./res/icon.png ./res/icon.png.bak
             mv ./res/tray-icon.ico ./res/tray-icon.ico.bak
@@ -592,7 +633,7 @@ jobs:
           shell: pwsh
           continue_on_error: true
           command: |
-            Invoke-WebRequest -Uri ${{ env.logolink_url }}/get_png?filename=${{ env.logolink_file }}"&"uuid=${{ env.logolink_uuid }} -OutFile ./rustdesk/data/flutter_assets/assets/logo.png
+            if ("${{ inputs.release_mode }}" -eq "true") { Copy-Item ./release-pngs/logo.png ./rustdesk/data/flutter_assets/assets/logo.png -Force } else { Invoke-WebRequest -Uri ${{ env.logolink_url }}/get_png?filename=${{ env.logolink_file }}"&"uuid=${{ env.logolink_uuid }} -OutFile ./rustdesk/data/flutter_assets/assets/logo.png }
 
       - name: find Runner.res
         # Windows: find Runner.res (compiled from ./flutter/windows/runner/Runner.rc), copy to ./Runner.res
@@ -717,8 +758,18 @@ jobs:
         run: |
           mv ./SignOutput/rustdesk.msi "./SignOutput/${{ env.filename }}.msi" || echo "rustdesk"
 
+      - name: Upload release binaries (release_mode)
+        if: ${{ inputs.release_mode }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofiber-build-windows
+          path: |
+            ./SignOutput/${{ env.filename }}.exe
+            ./SignOutput/${{ env.filename }}.msi
+          if-no-files-found: warn
+
       - name: send file to rdgen server
-        if: ${{ env.rdgen == 'true' }}
+        if: ${{ env.rdgen == 'true' && !inputs.release_mode }}
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 10
@@ -730,7 +781,7 @@ jobs:
             curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./SignOutput/${{ env.filename }}.msi" -F "uuid=${{ env.uuid }}" ${{ secrets.GENURL }}/save_custom_client || true
 
       - name: send file to api server
-        if: ${{ env.rdgen == 'false' }}
+        if: ${{ env.rdgen == 'false' && !inputs.release_mode }}
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 10
@@ -745,7 +796,9 @@ jobs:
     needs: [build-for-windows-flutter]
     runs-on: ubuntu-latest
     continue-on-error: true
-    if: always()
+    # Skipped in release_mode: the encrypted-secrets-zip artifact is shared by
+    # all platform builds in the caller's run and is cleaned up by the caller.
+    if: ${{ always() && !inputs.release_mode }}
     steps:
       - name: Delete secrets artifact
         uses: geekyeggo/delete-artifact@v5

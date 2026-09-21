@@ -1,0 +1,148 @@
+name: OFIBER Release Builder
+run-name: OFIBER Release - ${{ inputs.config }} v${{ inputs.version }}
+
+# Offline release pipeline: builds branded RustDesk clients for the committed
+# OFIBER configs (.github/release-configs/<config>) across every OS and
+# publishes them as a GitHub Release, without needing the live RDGen web
+# service. Build inputs are produced in-CI by .github/scripts/make_secrets_zip.py
+# (identical to what the web service would dispatch) and handed to the existing
+# generator-* workflows in release_mode. Reuses the repo's existing ZIP_PASSWORD
+# secret for the encrypted secrets bundle.
+
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: 'Which committed config to build'
+        type: choice
+        options:
+          - OFIBER
+          - OFIBER_client
+        default: OFIBER
+      version:
+        description: 'RustDesk version to build'
+        type: string
+        default: '1.4.9'
+      windows:
+        description: 'Build Windows x64'
+        type: boolean
+        default: true
+      dry_run:
+        description: 'Only prepare + validate build inputs, skip the long builds'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  prepare:
+    name: Prepare build inputs
+    runs-on: ubuntu-latest
+    outputs:
+      filename: ${{ steps.prep.outputs.filename }}
+      appname: ${{ steps.prep.outputs.appname }}
+      uuid: ${{ steps.prep.outputs.uuid }}
+      version: ${{ steps.prep.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure ZIP_PASSWORD is configured
+        env:
+          ZIP_PASSWORD: ${{ secrets.ZIP_PASSWORD }}
+        run: |
+          if [ -z "$ZIP_PASSWORD" ]; then
+            echo "::error::Repo secret ZIP_PASSWORD is not set. Add it (the same value your live RDGen service uses) and re-run."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pyzipper
+        run: pip install pyzipper
+
+      - name: Build encrypted secrets bundle + PNGs
+        id: prep
+        env:
+          ZIP_PASSWORD: ${{ secrets.ZIP_PASSWORD }}
+        run: |
+          python3 .github/scripts/make_secrets_zip.py \
+            --config-name "${{ inputs.config }}" \
+            --version "${{ inputs.version }}" \
+            --zip-password "$ZIP_PASSWORD" \
+            --out-zip secrets.zip \
+            --png-dir release-pngs \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload encrypted secrets artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-secrets-zip
+          path: secrets.zip
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload release PNGs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-pngs
+          path: release-pngs/*
+          retention-days: 1
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows x64
+    needs: prepare
+    if: ${{ inputs.windows && !inputs.dry_run }}
+    uses: ./.github/workflows/generator-windows.yml
+    with:
+      version: ${{ inputs.version }}
+      release_mode: true
+      config_name: ${{ inputs.config }}
+    secrets: inherit
+
+  publish:
+    name: Publish GitHub Release
+    needs: [prepare, build-windows]
+    if: ${{ !inputs.dry_run && !cancelled() && needs.prepare.result == 'success' && contains(needs.*.result, 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build outputs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ofiber-build-*
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: |
+          echo "Collected release files:"
+          find dist -type f -printf '  %p (%s bytes)\n' || true
+          if [ -z "$(find dist -type f 2>/dev/null)" ]; then
+            echo "::error::No build artifacts were produced."
+            exit 1
+          fi
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.config }}-v${{ inputs.version }}-build${{ github.run_number }}
+          name: ${{ needs.prepare.outputs.appname }} v${{ inputs.version }} (build ${{ github.run_number }})
+          body: |
+            Custom RustDesk clients generated from `.github/release-configs/${{ inputs.config }}`.
+
+            - Config: `${{ inputs.config }}`
+            - App name: `${{ needs.prepare.outputs.appname }}`
+            - Base file name: `${{ needs.prepare.outputs.filename }}`
+            - RustDesk version: `${{ inputs.version }}`
+
+            Built by the OFIBER Release Builder workflow (offline, no RDGen web service).
+          files: dist/**
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
