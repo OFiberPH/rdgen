@@ -1443,9 +1443,15 @@ jobs:
             # filename happened to be equal. The deb is moved out of the way first
             # because `appimage/*` globs it too, and sed over an ar archive rewrites
             # bytes inside it.
+            # The deb (from build-rustdesk-linux) uses the lowercase package id for
+            # its paths/binary, so the recipe's identifier and the repackaged .deb
+            # name must match it; RustDesk -> app name only touches the display name.
+            LXPKG=$(printf '%s' "${{ env.filename }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-' | tr -cd 'a-z0-9.+-')
+            [ -z "$LXPKG" ] && LXPKG=rustdesk
             mv appimage/rustdesk.deb "${RUNNER_TEMP}/appimage-payload.deb"
-            sed -ie "s|rustdesk|${{ env.appname }}|g" appimage/*
-            mv "${RUNNER_TEMP}/appimage-payload.deb" "appimage/${{ env.appname }}.deb"
+            sed -ie "s|RustDesk|${{ env.appname }}|g" appimage/*
+            sed -ie "s|rustdesk|$LXPKG|g" appimage/*
+            mv "${RUNNER_TEMP}/appimage-payload.deb" "appimage/$LXPKG.deb"
           fi
           sudo apt-get update -y
           sudo apt-get install -y libarchive-tools libfuse2
@@ -1591,16 +1597,22 @@ jobs:
               # Same as the AppImage job: the manifest's source path is rewritten to
               # <appname>.deb by the seds below, so the file must carry that name, and
               # the deb is moved aside first because `flatpak/*` globs it too.
+              # The deb (from build-rustdesk-linux) uses the lowercase package id
+              # for its paths/binary, so the identifier placeholder (FLAT_0) and the
+              # repackaged .deb name must match it; the display placeholder (FLAT_1)
+              # keeps the app name.
+              LXPKG=$(printf '%s' "${{ env.filename }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-' | tr -cd 'a-z0-9.+-')
+              [ -z "$LXPKG" ] && LXPKG=rustdesk
               mv flatpak/rustdesk.deb /tmp/flatpak-payload.deb
               sed -ie "s|rustdesk|@@RDGEN_FLAT_0@@|g" flatpak/*
               sed -ie "s|RustDesk|@@RDGEN_FLAT_1@@|g" flatpak/*
-              sed -ie "s|@@RDGEN_FLAT_0@@|${{ env.appname }}|g" flatpak/*
+              sed -ie "s|@@RDGEN_FLAT_0@@|$LXPKG|g" flatpak/*
               sed -ie "s|@@RDGEN_FLAT_1@@|${{ env.appname }}|g" flatpak/*
-              mv /tmp/flatpak-payload.deb "flatpak/${{ env.appname }}.deb"
+              mv /tmp/flatpak-payload.deb "flatpak/$LXPKG.deb"
               # The manifest's other source is the metainfo file. Those same seds rewrote
               # the REFERENCE to it without renaming the file on disk, so only the name
               # is left to fix; its contents are already rewritten.
-              FLAT="$(echo "${{ env.appname }}" | tr -d ' ')"
+              FLAT="$LXPKG"
               BUNDLE_ID="com.${FLAT}.${FLAT}"
               sed -ie "s|\"id\": \"com[^\"]*\"|\"id\": \"${BUNDLE_ID}\"|" flatpak/rustdesk.json
               sed -ie "s|\"path\": \"com[^\"]*\.metainfo\.xml\"|\"path\": \"${BUNDLE_ID}.metainfo.xml\"|" flatpak/rustdesk.json
