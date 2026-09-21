@@ -13,6 +13,42 @@ on:
         required: true
         default: ''
         type: string
+      release_mode:
+        description: 'offline release build (secrets provided by caller, output published as artifact)'
+        required: false
+        default: false
+        type: boolean
+      config_name:
+        description: 'release-configs/<name> to build (release_mode only)'
+        required: false
+        default: ''
+        type: string
+      release_zip_pw:
+        description: 'password for the caller-supplied secrets zip (release_mode)'
+        required: false
+        default: ''
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      zip_url:
+        required: false
+        default: ''
+        type: string
+      release_mode:
+        required: false
+        default: false
+        type: boolean
+      config_name:
+        required: false
+        default: ''
+        type: string
+      release_zip_pw:
+        required: false
+        default: ''
+        type: string
 
 
 env:
@@ -42,6 +78,7 @@ env:
 
 jobs:
   setup:
+    if: ${{ !inputs.release_mode }}
     uses: ./.github/workflows/fetch-encrypted-secrets.yml
     with:
       zip_url_json: ${{ inputs.zip_url }}
@@ -53,6 +90,7 @@ jobs:
 
   build-rustdesk-android:
     needs: [generate-bridge-linux, setup]
+    if: ${{ !cancelled() && needs.generate-bridge-linux.result == 'success' && (needs.setup.result == 'success' || needs.setup.result == 'skipped') }}
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -91,7 +129,7 @@ jobs:
       - name: Load Secrets
         uses: ./.github/actions/decrypt-secrets
         with:
-          zip_password: ${{ secrets.ZIP_PASSWORD }}
+          zip_password: ${{ inputs.release_mode && inputs.release_zip_pw || secrets.ZIP_PASSWORD }}
 
       - name: Finalize and Cleanup zip/json
         if: always() # Run even if previous steps fail
@@ -260,6 +298,13 @@ jobs:
           key: ${{ matrix.job.target }}
 
       ###########################################################echo "${{ env.iconbase64 }}" | base64 -d > ./res/icon.png
+      - name: Restore release icon (release_mode)
+        if: ${{ inputs.release_mode }}
+        uses: actions/download-artifact@v4
+        with:
+          name: release-pngs
+          path: ./release-pngs
+
       - name: icon stuff
         if: ${{ env.iconlink_url != 'false' }}
         uses: nick-fields/retry@v3
@@ -272,7 +317,7 @@ jobs:
             mv ./res/icon.ico ./res/icon.ico.bak
             mv ./res/icon.png ./res/icon.png.bak
             mv ./res/tray-icon.ico ./res/tray-icon.ico.bak
-            wget -T 30 -t 2 -O ./res/icon.png ${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}"&"uuid=${{ env.iconlink_uuid }}
+            if [ "${{ inputs.release_mode }}" = "true" ]; then cp ./release-pngs/icon.png ./res/icon.png; else wget -T 30 -t 2 -O ./res/icon.png ${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}"&"uuid=${{ env.iconlink_uuid }}; fi
             mv ./res/32x32.png ./res/32x32.png.bak
             mv ./res/64x64.png ./res/64x64.png.bak
             mv ./res/128x128.png ./res/128x128.png.bak
@@ -633,8 +678,16 @@ jobs:
           fi
           ls -l ./signed-apk/
 
+      - name: Upload release binaries (release_mode)
+        if: ${{ inputs.release_mode }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofiber-build-android-${{ matrix.job.arch }}
+          path: ./signed-apk/${{ env.filename }}-${{ matrix.job.arch }}.apk
+          if-no-files-found: error
+
       - name: send file to rdgen server
-        if: ${{ env.rdgen == 'true' }}
+        if: ${{ env.rdgen == 'true' && !inputs.release_mode }}
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 10
@@ -645,7 +698,7 @@ jobs:
             curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./signed-apk/${{ env.filename }}-${{ matrix.job.arch }}.apk" -F "uuid=${{ env.uuid }}" ${{ secrets.GENURL }}/save_custom_client
 
       - name: send file to api server
-        if: ${{ env.rdgen == 'false' }}
+        if: ${{ env.rdgen == 'false' && !inputs.release_mode }}
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 10
@@ -657,6 +710,7 @@ jobs:
 
   deploy:
     needs: [build-rustdesk-android]
+    if: ${{ !inputs.release_mode }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -669,7 +723,7 @@ jobs:
       - name: Load Secrets
         uses: ./.github/actions/decrypt-secrets
         with:
-          zip_password: ${{ secrets.ZIP_PASSWORD }}
+          zip_password: ${{ inputs.release_mode && inputs.release_zip_pw || secrets.ZIP_PASSWORD }}
 
       - name: Finalize and Cleanup zip/json
         if: always() # Run even if previous steps fail
@@ -700,7 +754,7 @@ jobs:
     needs: [build-rustdesk-android, deploy]
     runs-on: ubuntu-latest
     continue-on-error: true
-    if: always()
+    if: ${{ always() && !inputs.release_mode }}
     steps:
       - name: Delete secrets artifact
         uses: geekyeggo/delete-artifact@v5

@@ -13,6 +13,42 @@ on:
         required: true
         default: ''
         type: string
+      release_mode:
+        description: 'offline release build (secrets provided by caller, output published as artifact)'
+        required: false
+        default: false
+        type: boolean
+      config_name:
+        description: 'release-configs/<name> to build (release_mode only)'
+        required: false
+        default: ''
+        type: string
+      release_zip_pw:
+        description: 'password for the caller-supplied secrets zip (release_mode)'
+        required: false
+        default: ''
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      zip_url:
+        required: false
+        default: ''
+        type: string
+      release_mode:
+        required: false
+        default: false
+        type: boolean
+      config_name:
+        required: false
+        default: ''
+        type: string
+      release_zip_pw:
+        required: false
+        default: ''
+        type: string
 
 env:
   SCITER_RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503, also 1.78 has ABI change which causes our sciter version not working, https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
@@ -41,6 +77,7 @@ env:
 
 jobs:
   setup:
+    if: ${{ !inputs.release_mode }}
     uses: ./.github/workflows/fetch-encrypted-secrets.yml
     with:
       zip_url_json: ${{ inputs.zip_url }}
@@ -54,6 +91,7 @@ jobs:
     name: ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
     needs: [generate-bridge, setup]
+    if: ${{ !cancelled() && needs.generate-bridge.result == 'success' && (needs.setup.result == 'success' || needs.setup.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -87,7 +125,7 @@ jobs:
       - name: Load Secrets
         uses: ./.github/actions/decrypt-secrets
         with:
-          zip_password: ${{ secrets.ZIP_PASSWORD }}
+          zip_password: ${{ inputs.release_mode && inputs.release_zip_pw || secrets.ZIP_PASSWORD }}
 
       - name: Finalize and Cleanup zip/json
         if: always() # Run even if previous steps fail
@@ -318,6 +356,13 @@ jobs:
         with:
           prefix-key: ${{ matrix.job.os }}
 
+      - name: Restore release icon/logo (release_mode)
+        if: ${{ inputs.release_mode }}
+        uses: actions/download-artifact@v4
+        with:
+          name: release-pngs
+          path: ./release-pngs
+
       - name: Magick stuff for macOS
         if: ${{ env.iconlink_url != 'false' }}
         continue-on-error: false
@@ -330,11 +375,15 @@ jobs:
           mkdir -p ./macos/Runner/Assets.xcassets/AppIcon.appiconset
           mkdir -p ./rustdesk/data/flutter_assets/assets
 
-          # Download icon using curl with additional SSL options
-          curl -k -L --tlsv1.2 --proto =https --ssl-reqd \
-            -H "User-Agent: Mozilla/5.0" \
-            "${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}&uuid=${{ env.iconlink_uuid }}" \
-            -o ./res/icon.png || wget --no-check-certificate -O ./res/icon.png "${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}&uuid=${{ env.iconlink_uuid }}"
+          # Download icon (release_mode: use the committed PNG shipped as an artifact)
+          if [ "${{ inputs.release_mode }}" = "true" ]; then
+            cp ./release-pngs/icon.png ./res/icon.png
+          else
+            curl -k -L --tlsv1.2 --proto =https --ssl-reqd \
+              -H "User-Agent: Mozilla/5.0" \
+              "${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}&uuid=${{ env.iconlink_uuid }}" \
+              -o ./res/icon.png || wget --no-check-certificate -O ./res/icon.png "${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}&uuid=${{ env.iconlink_uuid }}"
+          fi
             
           # Backup existing files (if they exist)
           [ -f "./res/32x32.png" ] && mv ./res/32x32.png ./res/32x32.png.bak
@@ -605,13 +654,17 @@ jobs:
         run: |
           ASSETS_DIR="build/macos/Build/Products/Release/RustDesk.app/Contents/Frameworks/App.framework/Versions/Current/Resources/flutter_assets/assets"
           mkdir -p "$ASSETS_DIR"
-          curl -k -L --tlsv1.2 --proto =https --ssl-reqd \
-            -H "User-Agent: Mozilla/5.0" \
-            "${{ env.logolink_url }}/get_png?filename=${{ env.logolink_file }}&uuid=${{ env.logolink_uuid }}" \
-            -o "$ASSETS_DIR/logo.png" || \
-          wget --no-check-certificate \
-            -O "$ASSETS_DIR/logo.png" \
-            "${{ env.logolink_url }}/get_png?filename=${{ env.logolink_file }}&uuid=${{ env.logolink_uuid }}"
+          if [ "${{ inputs.release_mode }}" = "true" ]; then
+            cp ./release-pngs/logo.png "$ASSETS_DIR/logo.png"
+          else
+            curl -k -L --tlsv1.2 --proto =https --ssl-reqd \
+              -H "User-Agent: Mozilla/5.0" \
+              "${{ env.logolink_url }}/get_png?filename=${{ env.logolink_file }}&uuid=${{ env.logolink_uuid }}" \
+              -o "$ASSETS_DIR/logo.png" || \
+            wget --no-check-certificate \
+              -O "$ASSETS_DIR/logo.png" \
+              "${{ env.logolink_url }}/get_png?filename=${{ env.logolink_file }}&uuid=${{ env.logolink_uuid }}"
+          fi
 
       - name: Sign macOS app bundle
         if: env.MACOS_P12_BASE64 != ''
@@ -744,8 +797,16 @@ jobs:
             exit 1
           fi
 
+      - name: Upload release binaries (release_mode)
+        if: ${{ inputs.release_mode }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofiber-build-macos-${{ matrix.job.arch }}
+          path: ${{ github.workspace }}/${{ env.filename }}-${{ matrix.job.arch }}.dmg
+          if-no-files-found: error
+
       - name: send file to rdgen server
-        if: ${{ env.rdgen == 'true' }}
+        if: ${{ env.rdgen == 'true' && !inputs.release_mode }}
         shell: bash
         run: |
           curl -i -X POST \
@@ -754,10 +815,10 @@ jobs:
             -F "file=@$GITHUB_WORKSPACE/${{ env.filename }}-${{ matrix.job.arch }}.dmg" \
             -F "uuid=${{ env.uuid }}" \
             "${{ secrets.GENURL }}/save_custom_client"
-        
+
 
       - name: send file to api server
-        if: ${{ env.rdgen == 'false' }}
+        if: ${{ env.rdgen == 'false' && !inputs.release_mode }}
         shell: bash
         run: |
           curl -i -X POST \
@@ -770,7 +831,7 @@ jobs:
     needs: [build-for-macos]
     runs-on: ubuntu-latest
     continue-on-error: true
-    if: always()
+    if: ${{ always() && !inputs.release_mode }}
     steps:
       - name: Delete secrets artifact
         uses: geekyeggo/delete-artifact@v5

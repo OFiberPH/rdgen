@@ -3,11 +3,12 @@ run-name: OFIBER Release - ${{ inputs.config }} v${{ inputs.version }}
 
 # Offline release pipeline: builds branded RustDesk clients for the committed
 # OFIBER configs (.github/release-configs/<config>) across every OS and
-# publishes them as a GitHub Release, without needing the live RDGen web
-# service. Build inputs are produced in-CI by .github/scripts/make_secrets_zip.py
-# (identical to what the web service would dispatch) and handed to the existing
-# generator-* workflows in release_mode. Reuses the repo's existing ZIP_PASSWORD
-# secret for the encrypted secrets bundle.
+# publishes them as a single GitHub Release, without needing the live RDGen web
+# service or any repo secret. Build inputs are produced in-CI by
+# .github/scripts/make_secrets_zip.py (identical to what the web service would
+# dispatch) and handed to the existing generator-* workflows in release_mode.
+# All selected platform builds run in parallel; run this workflow once per
+# config (OFIBER and OFIBER_client) to build both at the same time.
 
 on:
   workflow_dispatch:
@@ -25,6 +26,22 @@ on:
         default: '1.4.9'
       windows:
         description: 'Build Windows x64'
+        type: boolean
+        default: true
+      windows_x86:
+        description: 'Build Windows 32-bit (x86)'
+        type: boolean
+        default: true
+      linux:
+        description: 'Build Linux (deb/rpm/pkg + AppImage + Flatpak)'
+        type: boolean
+        default: true
+      macos:
+        description: 'Build macOS (.dmg)'
+        type: boolean
+        default: true
+      android:
+        description: 'Build Android (.apk)'
         type: boolean
         default: true
       dry_run:
@@ -102,10 +119,64 @@ jobs:
       release_zip_pw: rdgen-offline-release
     secrets: inherit
 
+  build-windows-x86:
+    name: Windows x86
+    needs: prepare
+    if: ${{ inputs.windows_x86 && !inputs.dry_run }}
+    uses: ./.github/workflows/generator-windows-x86.yml
+    with:
+      version: ${{ inputs.version }}
+      release_mode: true
+      config_name: ${{ inputs.config }}
+      release_zip_pw: rdgen-offline-release
+    secrets: inherit
+
+  build-linux:
+    name: Linux
+    needs: prepare
+    if: ${{ inputs.linux && !inputs.dry_run }}
+    uses: ./.github/workflows/generator-linux.yml
+    with:
+      version: ${{ inputs.version }}
+      release_mode: true
+      config_name: ${{ inputs.config }}
+      release_zip_pw: rdgen-offline-release
+    secrets: inherit
+
+  build-macos:
+    name: macOS
+    needs: prepare
+    if: ${{ inputs.macos && !inputs.dry_run }}
+    uses: ./.github/workflows/generator-macos.yml
+    with:
+      version: ${{ inputs.version }}
+      release_mode: true
+      config_name: ${{ inputs.config }}
+      release_zip_pw: rdgen-offline-release
+    secrets: inherit
+
+  build-android:
+    name: Android
+    needs: prepare
+    if: ${{ inputs.android && !inputs.dry_run }}
+    uses: ./.github/workflows/generator-android.yml
+    with:
+      version: ${{ inputs.version }}
+      release_mode: true
+      config_name: ${{ inputs.config }}
+      release_zip_pw: rdgen-offline-release
+    secrets: inherit
+
   publish:
     name: Publish GitHub Release
-    needs: [prepare, build-windows]
-    if: ${{ !inputs.dry_run && !cancelled() && needs.build-windows.result == 'success' }}
+    needs: [prepare, build-windows, build-windows-x86, build-linux, build-macos, build-android]
+    if: >-
+      ${{ !inputs.dry_run && !cancelled() && (
+        needs.build-windows.result == 'success' ||
+        needs.build-windows-x86.result == 'success' ||
+        needs.build-linux.result == 'success' ||
+        needs.build-macos.result == 'success' ||
+        needs.build-android.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - name: Download build outputs
@@ -138,7 +209,8 @@ jobs:
             - RustDesk version: `${{ inputs.version }}`
 
             Built by the OFIBER Release Builder workflow (offline, no RDGen web service).
+            Some platforms build several package formats (Linux: deb/rpm/pkg + AppImage + Flatpak).
           files: dist/**
           draft: false
           prerelease: false
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false

@@ -13,6 +13,42 @@ on:
         required: true
         default: ''
         type: string
+      release_mode:
+        description: 'offline release build (secrets provided by caller, output published as artifact)'
+        required: false
+        default: false
+        type: boolean
+      config_name:
+        description: 'release-configs/<name> to build (release_mode only)'
+        required: false
+        default: ''
+        type: string
+      release_zip_pw:
+        description: 'password for the caller-supplied secrets zip (release_mode)'
+        required: false
+        default: ''
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      zip_url:
+        required: false
+        default: ''
+        type: string
+      release_mode:
+        required: false
+        default: false
+        type: boolean
+      config_name:
+        required: false
+        default: ''
+        type: string
+      release_zip_pw:
+        required: false
+        default: ''
+        type: string
 
 env:
   SCITER_RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503, also 1.78 has ABI change which causes our sciter version not working, https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
@@ -47,6 +83,7 @@ env:
 
 jobs:
   setup:
+    if: ${{ !inputs.release_mode }}
     uses: ./.github/workflows/fetch-encrypted-secrets.yml
     with:
       zip_url_json: ${{ inputs.zip_url }}
@@ -54,6 +91,7 @@ jobs:
   build-for-windows-sciter:
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     needs: setup
+    if: ${{ !cancelled() && (needs.setup.result == 'success' || needs.setup.result == 'skipped') }}
     runs-on: ${{ matrix.job.os }}
     # Temporarily disable this action due to additional test is needed.
     # if: false
@@ -81,7 +119,7 @@ jobs:
       - name: Load Secrets
         uses: ./.github/actions/decrypt-secrets
         with:
-          zip_password: ${{ secrets.ZIP_PASSWORD }}
+          zip_password: ${{ inputs.release_mode && inputs.release_zip_pw || secrets.ZIP_PASSWORD }}
 
       - name: Finalize and Cleanup zip/json
         if: always() # Run even if previous steps fail
@@ -315,6 +353,13 @@ jobs:
           head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
         shell: bash
 
+      - name: Restore release icon (release_mode)
+        if: ${{ inputs.release_mode }}
+        uses: actions/download-artifact@v4
+        with:
+          name: release-pngs
+          path: ./release-pngs
+
       - name: icon stuff
         if: ${{ env.iconlink_url != 'false' }}
         continue-on-error: true
@@ -333,7 +378,7 @@ jobs:
           retry_wait_seconds: 15
           shell: pwsh
           command: |
-            Invoke-WebRequest -Uri ${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}"&"uuid=${{ env.iconlink_uuid }} -OutFile ./res/icon.png 
+            if ("${{ inputs.release_mode }}" -eq "true") { Copy-Item ./release-pngs/icon.png ./res/icon.png -Force } else { Invoke-WebRequest -Uri ${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}"&"uuid=${{ env.iconlink_uuid }} -OutFile ./res/icon.png }
             mv ./res/32x32.png ./res/32x32.png.bak
             mv ./res/64x64.png ./res/64x64.png.bak
             mv ./res/128x128.png ./res/128x128.png.bak
@@ -533,14 +578,22 @@ jobs:
         run: |
           mv ./SignOutput/rustdesk.exe "./SignOutput/${{ env.filename }}.exe" || echo "rustdesk"
 
+      - name: Upload release binaries (release_mode)
+        if: ${{ inputs.release_mode }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofiber-build-windows-x86
+          path: ./SignOutput/${{ env.filename }}.exe
+          if-no-files-found: error
+
       - name: send file to rdgen server
-        if: ${{ env.rdgen == 'true' }}
+        if: ${{ env.rdgen == 'true' && !inputs.release_mode }}
         shell: bash
         run: |
           curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./SignOutput/${{ env.filename }}.exe" -F "uuid=${{ env.uuid }}" ${{ secrets.GENURL }}/save_custom_client
 
       - name: send file to api server
-        if: ${{ env.rdgen == 'false' }}
+        if: ${{ env.rdgen == 'false' && !inputs.release_mode }}
         shell: bash
         run: |
           curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./SignOutput/${{ env.filename }}.exe" ${{ env.apiServer }}/api/save_custom_client
@@ -549,7 +602,7 @@ jobs:
     needs: [build-for-windows-sciter]
     runs-on: ubuntu-latest
     continue-on-error: true
-    if: always()
+    if: ${{ always() && !inputs.release_mode }}
     steps:
       - name: Delete secrets artifact
         uses: geekyeggo/delete-artifact@v5
