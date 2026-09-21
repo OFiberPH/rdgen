@@ -1342,6 +1342,9 @@ jobs:
   build-appimage:
     name: Build appimage ${{ matrix.job.target }}
     needs: [build-rustdesk-linux]
+    # Explicit gate: in release_mode the skipped `setup` ancestor makes the
+    # default success() gate skip this job, so key off the direct dependency.
+    if: ${{ !cancelled() && needs.build-rustdesk-linux.result == 'success' }}
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
@@ -1500,6 +1503,9 @@ jobs:
     name: Build flatpak ${{ matrix.job.target }}${{ matrix.job.suffix }}
     needs:
       - build-rustdesk-linux
+    # Explicit gate: in release_mode the skipped `setup` ancestor makes the
+    # default success() gate skip this job, so key off the direct dependency.
+    if: ${{ !cancelled() && needs.build-rustdesk-linux.result == 'success' }}
     runs-on: ${{ matrix.job.on }}
     strategy:
       fail-fast: false
